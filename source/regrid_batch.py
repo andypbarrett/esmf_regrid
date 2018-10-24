@@ -41,7 +41,7 @@ def getFileList(diri, first_date=None, last_date=None):
         m = re.compile('(\d{8}).nc')
         return dt.datetime.strptime(m.search(f).groups(0)[0], '%Y%m%d')
         
-    fileList = glob.glob(os.path.join(diri,'????','??','*.????????.nc'))
+    fileList = glob.glob(os.path.join(diri,'????','??','*.????????.nc*'))
     fileList.sort()
 
     if first_date:

@@ -64,7 +64,8 @@ def griddef(gridname):
     gridname - standard name of grid
     """
     gdef = {
-            'Nh': {'c': 12.5, 'nx': 1441, 'ny': 1441, 'r0': 720, 's0': 720}
+            'Nh': {'c': 12.5, 'nx': 1441, 'ny': 1441, 'r0': 720, 's0': 720},
+            'Nh50km': {'c': 50., 'nx': 361, 'ny': 361, 'r0': 180, 's0': 180},
             }
 
     try:
@@ -117,11 +118,11 @@ def ESMF_makeEASEGrid(grid_name):
     return grid
 
 def ESMF_makeLLGrid(grid_name):
-
-    if grid_name == 'JRA55':
-        grid = gridFromFile(srcGridFile[grid_name])
-    else:
-        grid = ESMF.Grid(filename=srcGridFile[grid_name], filetype=ESMF.FileFormat.SCRIP)
+    """
+    Wrapper for gridFromFile
+    """
+    
+    grid = gridFromFile(srcGridFile[grid_name])
 
     return grid
 

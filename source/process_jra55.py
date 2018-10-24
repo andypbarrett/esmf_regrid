@@ -9,11 +9,12 @@ import xarray as xr
 import os
 import numpy as np
 import glob
+import re
 
 vardict = {
-           'TOTPREC': {'filevar': '061_tprat', 'gribvar': 'TPRAT_GDS4_SFC_ave3h'},
-           'SNOFALL': {'filevar': '064_srweq', 'gribvar': 'SRWEQ_GDS4_SFC_ave3h'},
-           'T2M':     {'filevar': '011_tmp', 'gribvar': 'TMP_GDS4_HTGL'},
+           'TOTPREC': {'filevar': 'fcst_phy2m.061_tprat', 'gribvar': 'TPRAT_GDS4_SFC_ave3h'},
+           'SNOFALL': {'filevar': 'fcst_phy2m.064_srweq', 'gribvar': 'SRWEQ_GDS4_SFC_ave3h'},
+           'T2M':     {'filevar': 'anl_surf.011_tmp', 'gribvar': 'TMP_GDS4_HTGL'},
            }
 
 def splitall(path):
@@ -49,48 +50,53 @@ def make_fileout(fili, date, reanalysis, variable, grid=None):
 
     return os.path.join(dirpath, fname)
 
+def get_coord_name(da, coord):
+    ll = list(filter(re.compile(coord).search, list(da.coords.keys())))
+    if ll:
+        return ll[0]
+    else:
+        return None
+    
 def process_onefile(fili, variable, verbose=False):
 
     ds = xr.open_dataset(fili)
 
     nt = ds.coords['initial_time0_hours'].size
-    
-    for it in np.arange(0,nt,4):
 
-        if (variable == 'TOTPREC') | (variable == 'SNOWFALL'):
-            # Aggregate 3h average precipitation to daily total
-            # N.B. Units are already mm/day so only need to sum
-            dayVar = ds[vardict[variable]['gribvar']][it:it+4,:,:,:].sum(
-                dim=('initial_time0_hours', 'forecast_time1'))
-        else:
-            dayVar = ds[vardict[variable]['gribvar']][it:it+4,:,:,:].mean(
-                dim=('initial_time0_hours', 'forecast_time1'))
-            
-        # Set name and attributes
-        dayVar.name = variable
-        dayVar.attrs = ds[vardict[variable]['gribvar']].attrs
-        # Change coordinate names
-        dayVar = dayVar.rename({'g4_lat_2': 'lat', 'g4_lon_3': 'lon'})
+    if (variable == 'TOTPREC') | (variable == 'SNOWFALL'):
+        # Aggregate 3h average precipitation to daily total
+        # N.B. Units are already mm/day so only need to sum.  OR DO I NEED TO TAKE MEAN
+        dayVar = ds[vardict[variable]['gribvar']].resample(initial_time0_hours='D').sum(
+               dim=['initial_time0_hours','forecast_time1'])
+    else:
+        dayVar = ds[vardict[variable]['gribvar']].resample(initial_time0_hours='D').mean(
+            dim='initial_time0_hours')
         
-        dsout = xr.Dataset({variable: dayVar}, attrs=ds.attrs)
+    # Set name and attributes
+    dayVar.name = variable
+    dayVar.attrs = ds[vardict[variable]['gribvar']].attrs
+    # Change coordinate names
+    dayVar = dayVar.rename({get_coord_name(dayVar, 'lat'): 'lat',
+                            get_coord_name(dayVar, 'lon'): 'lon'})
 
-        filo = make_fileout(fili, ds.coords['initial_time0_hours'][it], 'JRA55', variable)
+    for time in dayVar.coords['initial_time0_hours']:
+        filo = make_fileout(fili, time, 'JRA55', variable)
         if verbose: print ('% process_onefile: writing data to '+filo)
         if not os.path.exists( os.path.dirname(filo) ):
             os.makedirs( os.path.dirname(filo) )
-        dsout.to_netcdf( filo )
+        dayVar.sel(initial_time0_hours=time).to_netcdf( filo )
 
     return
 
 def process_jra55(variable, verbose=False):
 
     diri = '/projects/arctic_scientist_data/Reanalysis/JRA55/daily/temp'
-    fileList = glob.glob( os.path.join( diri,'fcst_phy2m.{:s}.*.nc.gz'.format(vardict[variable]['filevar']) ) )
+    fileList = glob.glob( os.path.join( diri,'{:s}.*.nc.gz'.format(vardict[variable]['filevar']) ) )
 
     for f in fileList:
         if verbose: print ( '% process_jra55_totprec: Processing '+f )
         process_onefile( f, variable, verbose=verbose )
-        
+    
 if __name__ == "__main__":
     import argparse
 
