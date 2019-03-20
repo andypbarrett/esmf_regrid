@@ -9,14 +9,14 @@ import matplotlib.pyplot as plt
 import os, glob
 import re
 import datetime as dt
-from netCDF4 import Dataset
+from netCDF4 import Dataset, default_fillvals
 
 #from regrid import ESMF_makeEASEGrid, ESMF_makeLLGrid
 from regrid import ESMF_GenRegridWeights
 
 from constants import srcGridFile, dstGridFile, weightsFile, regridMethods
 
-def getField(fili, varName, field):
+def getField(fili, varName, field, mask_value=None):
     """
     Reads a field from a netCDF file and writes to srcField object
     """
@@ -25,9 +25,12 @@ def getField(fili, varName, field):
 
     ds = xr.open_dataset(fili)
 
+    # Work around to set NaN to a value
+    ds[varName] = ds[varName].where( ds[varName].notnull(), -999.)
+    
     field.data[:] = ds[varName].data.T
     attrs = ds[varName].attrs
-    
+
     ds.close()
     
     return field, attrs
@@ -44,6 +47,10 @@ def getFileList(diri, first_date=None, last_date=None):
     fileList = glob.glob(os.path.join(diri,'????','??','*.????????.nc*'))
     fileList.sort()
 
+    # Remove filepaths for regridded files - must match *.YYYYMMDD.nc4
+    p = re.compile('\d{8}.nc')
+    fileList = [f for f in fileList if p.search(f)]
+    
     if first_date:
         first = dt.datetime.strptime(first_date, '%Y%m%d')
     else:
@@ -58,9 +65,12 @@ def getFileList(diri, first_date=None, last_date=None):
                          
     return fileList
 
-def make_fileout(fili, dstGridName):
+def make_fileout(fili, dstGridName, method):
     """Returns output filepath"""
-    return fili.replace('.nc', '.{:s}.nc'.format(dstGridName))
+    if method == 'bilinear':
+        return fili.replace('.nc', '.{:s}.nc'.format(dstGridName))
+    else:
+        return fili.replace('.nc', '.{:s}.{:s}.nc'.format(dstGridName, method))
 
 def regrid_batch(srcGridName, dstGridName, datadir, srcVarName, first_date=None, last_date=None,
                  src_mask_values=None, dst_mask_values=None,
@@ -70,8 +80,8 @@ def regrid_batch(srcGridName, dstGridName, datadir, srcVarName, first_date=None,
 
     # Setup regrid object
     if verbose: print ('% Generating regrid weights')
-    regrid, srcField, dstField = ESMF_GenRegridWeights(srcGridName, dstGridName, method=method)
-
+    regrid, srcField, dstField = ESMF_GenRegridWeights(srcGridName, dstGridName,
+                                                       method=method,)
     if verbose: print ('% Getting fileList')
     fileList = getFileList(datadir, first_date=first_date, last_date=last_date)
     
@@ -84,34 +94,43 @@ def regrid_batch(srcGridName, dstGridName, datadir, srcVarName, first_date=None,
         dstField = regrid(srcField, dstField)
 
         # Mask dstField
-        dstField.data[...] = np.where(dstField.grid.mask[0] == 1, dstField.data, np.nan)
+        if srcGridName == 'ERA5-45N':
+            # Special case, mask out cells below 45N
+            dstField.data[...] = np.where(dstField.grid.get_coords(1) > 45., dstField.data, np.nan)
+        else:
+            dstField.data[...] = np.where(dstField.grid.mask[0] == 1, dstField.data, np.nan)
 
-        filo = make_fileout(fili, dstGridName)
+        filo = make_fileout(fili, dstGridName, method)
         if verbose: print ('   Writing regridded data to {:s}'.format(filo))
-        writeNetCDF(dstField, srcAttrs, srcVarName, filo)
+        writeNetCDF(dstField, srcAttrs, srcVarName, method, filo)
 
     return
 
-def writeNetCDF(field, attrs, varName, filo):
+def writeNetCDF(field, attrs, varName, method, filo):
     """
     Write data to NetCDF file
     """
 
     nx, ny = [360, 360]
-    fill_value = 1e20
-    
+    data_type = 'f4'
+
+    #field.data[...] = np.where(np.isfinite(field.data), field.data, fill_value)
+        
     rootgrp = Dataset(filo, 'w')
 
     x = rootgrp.createDimension('x', nx)
     y = rootgrp.createDimension('y', ny)
     
-    lat = rootgrp.createVariable( 'latitude', 'f4', ('x','y',) )
-    lon = rootgrp.createVariable( 'longitude', 'f4', ('x','y',) )
-    var = rootgrp.createVariable( varName, 'f4', ('x','y',), fill_value=fill_value )
+    lat = rootgrp.createVariable( 'latitude', data_type, ('x','y',) )
+    lon = rootgrp.createVariable( 'longitude', data_type, ('x','y',) )
+    var = rootgrp.createVariable( varName, data_type, ('x','y',),
+                                  fill_value=default_fillvals[data_type],
+                                  zlib=True, complevel=9)
 
     rootgrp.created = dt.datetime.now().strftime('%Y-%m-%d %H:%M')
     rootgrp.created_by = 'A.P.Barrett <apbarret@nsidc.org>'
-
+    rootgrp.method = 'Regridded with ESMPy using '+method
+    
     lat.long_name = 'latitude'
     lat.units = 'degrees_north'
     lon.long_name = 'longitude'
