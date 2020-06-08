@@ -74,7 +74,7 @@ def make_fileout(fili, dstGridName, method):
 
 def regrid_batch(srcGridName, dstGridName, datadir, srcVarName, first_date=None, last_date=None,
                  src_mask_values=None, dst_mask_values=None,
-                 method='bilinear', verbose=False):
+                 method='bilinear', verbose=False, min_value=None):
 
     ESMF.Manager(debug=True)
 
@@ -100,6 +100,13 @@ def regrid_batch(srcGridName, dstGridName, datadir, srcVarName, first_date=None,
         else:
             dstField.data[...] = np.where(dstField.grid.mask[0] == 1, dstField.data, np.nan)
 
+        if min_value is not None:
+            # Required to avoid RuntimeError.
+            # Also setting < min_values, rather than > min_values
+            # propagates nan, Inf through array
+            with np.errstate(all='ignore'):
+                dstField.data[...] = np.where(dstField.data < min_value, min_value, dstField.data)
+            
         filo = make_fileout(fili, dstGridName, method)
         if verbose: print ('   Writing regridded data to {:s}'.format(filo))
         writeNetCDF(dstField, srcAttrs, srcVarName, method, filo)
@@ -114,7 +121,7 @@ def writeNetCDF(field, attrs, varName, method, filo):
     nx, ny = [360, 360]
     data_type = 'f4'
 
-    #field.data[...] = np.where(np.isfinite(field.data), field.data, fill_value)
+    field.data[...] = np.where(np.isfinite(field.data), field.data, default_fillvals[data_type])
         
     rootgrp = Dataset(filo, 'w')
 
@@ -174,10 +181,18 @@ nearest_stod - Nearest neighbour - nearest source point to destination
 nearest_dtos - Nearest neighbour - nearest destination point to source
 patch - patch recovery interpolation - better approx to differentials
 conserve - Conservative interpolation - preserves integral''')
+    parser.add_argument('--min_value', action='store', type=float, default=None,
+                        help='Minimum valid value.  Values less than min_value are set to min_value')
     parser.add_argument('--verbose', '-v', action='store_true', default=False)
                         
     args = parser.parse_args()
 
-    regrid_batch(args.srcGridName, args.dstGridName, args.datadir, args.srcVarName,
-         first_date=args.first_date, last_date=args.last_date,
-         method=args.method, verbose=args.verbose)
+    regrid_batch(args.srcGridName,
+                 args.dstGridName,
+                 args.datadir,
+                 args.srcVarName,
+                 first_date=args.first_date,
+                 last_date=args.last_date,
+                 method=args.method,
+                 min_value=args.min_value,
+                 verbose=args.verbose)
